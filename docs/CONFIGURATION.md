@@ -57,6 +57,7 @@ for `BASE_PATH`, `PUBLIC_URL`, and `NOVNC_URL`.
 | `VNC_PASSWORD` | | VNC password. No password by default. |
 | `BROWSER_DIR` | `data/browser` | Browser profile directory |
 | `LANG` | `en-US` | Browser locale from POSIX `LANG` (e.g. `de_DE.UTF-8` → `de-DE`), so the fingerprint matches your IP |
+| `FGC_REGION` | | Set to `de` to run **Prime Gaming and Epic Games on the German sites**: `luna.amazon.de` (unless `PG_BASE_URL` is set to something else), `store.epicgames.com/de` + German Epic login, German browser locale for both. Other services are unaffected. Unset = US/English sites as before. |
 | `TZ` | | Container timezone (e.g. `America/Sao_Paulo`); also sets the browser `timezoneId` |
 | `<SVC>_PAGE_URL` | (per-service default) | Override a service's base URL (`EG_`, `GOG_`, `STEAM_`, `FAB_`, `HUMBLE_`, `FANATICAL_`, `LENOVO_`, `UBISOFT_`, `AE_PAGE_URL`; Prime uses `PG_BASE_URL`) |
 | `TIMEOUT` | `60` | Timeout in seconds for page actions |

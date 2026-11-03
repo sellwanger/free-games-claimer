@@ -165,7 +165,7 @@ export const SITES = [
         await page.waitForTimeout(3000);
         // Amazon redirects stale sessions to /ap/signin — check final URL first (real auth signal).
         if (/\/ap\/signin|\/sign[-_]?in/i.test(page.url())) return { loggedIn: false };
-        const signInBtn = await page.locator('button:has-text("Sign in")').count();
+        const signInBtn = await page.locator('button').filter({ hasText: /^(Sign in|Anmelden)$/i }).count();
         if (signInBtn > 0) return { loggedIn: false };
         const userEl = page.locator('[data-a-target="user-dropdown-first-name-text"]');
         if (await userEl.count() > 0) {
@@ -191,12 +191,13 @@ export const SITES = [
     subtitle: null,
     script: platformScript('epic-games'),
     claimOrder: 3,
-    loginUrl: 'https://www.epicgames.com/id/login?lang=en-US&noHostRedirect=true&redirectUrl=https://store.epicgames.com/en-US/free-games',
+    // cfg.eg_locale: 'de' with FGC_REGION=de, else 'en-US'.
+    get loginUrl() { return `https://www.epicgames.com/id/login?lang=${cfg.eg_locale || 'en-US'}&noHostRedirect=true&redirectUrl=https://store.epicgames.com/${cfg.eg_locale || 'en-US'}/free-games`; },
     // Sessions tab "open in new tab" target. loginUrl points to the login
     // form which is unhelpful for an already-authenticated user; homeUrl
     // sends them to the free-games landing page where they actually want
     // to go to verify their library or check what's on offer.
-    homeUrl: 'https://store.epicgames.com/en-US/free-games',
+    get homeUrl() { return `https://store.epicgames.com/${cfg.eg_locale || 'en-US'}/free-games`; },
     get browserDir() { return cfg.dir.browser; },
     contextOptions: null,
     defaultActive: true,
@@ -213,7 +214,7 @@ export const SITES = [
     async checkLogin(page) {
       try {
         const check = async () => {
-          await page.goto('https://store.epicgames.com/en-US/free-games', { waitUntil: 'domcontentloaded', timeout: 20000 });
+          await page.goto(this.homeUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
           await page.waitForTimeout(3000);
           const nav = page.locator('egs-navigation');
           const isLoggedIn = await nav.getAttribute('isloggedin');
