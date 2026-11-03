@@ -140,7 +140,13 @@ export const filenamify = s => s.replaceAll(':', '.').replace(/[^a-z0-9 _\-.]/gi
 // ?l=english, GOG /en, Epic /en-US, Fanatical /en) or scrape locale-blind
 // (Humble/Lenovo) follow the LANG locale; the rest pin en-US to keep locators.
 const EN_PINNED_SITES = new Set(['prime-gaming', 'microsoft', 'microsoft-mobile', 'fab', 'aliexpress']);
-export const siteLocale = siteId => EN_PINNED_SITES.has(siteId) ? 'en-US' : cfg.browser_locale || 'en-US';
+// FGC_REGION=de: Prime + Epic run with a German browser so Amazon/Epic serve
+// the German pages consistently; their locators accept German and English.
+const REGION_DE_SITES = new Set(['prime-gaming', 'epic-games']);
+export const siteLocale = siteId => {
+  if (cfg.region_de && REGION_DE_SITES.has(siteId)) return 'de-DE';
+  return EN_PINNED_SITES.has(siteId) ? 'en-US' : cfg.browser_locale || 'en-US';
+};
 
 // Chromium launch flags matching the context `locale` (pass siteLocale(id)):
 // set --lang/--accept-lang and disable auto-translate so DOM text stays in the

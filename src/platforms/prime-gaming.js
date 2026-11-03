@@ -20,6 +20,12 @@ const URL_CLAIM = `${BASE_URL}/claims/home`;
 // precedes the first colon. Codes themselves never contain one.
 const stripCodeLabel = s => s.replace(/^[^:]*:\s*/, '').trim();
 
+// UI labels in English + German (FGC_REGION=de → luna.amazon.de with a
+// German browser). Anchored where a loose match could hit body copy.
+const RX_SIGN_IN = /^(Sign in|Anmelden)$/i;
+const RX_COLLECTED = /^(Collected|Abgeholt|Gesammelt|Eingelöst)$/i;
+const RX_CLAIM_SUCCESS = /You collected this|^Success|^Erfolg|Du hast (das|dies) (abgeholt|eingelöst)/i;
+
 log.section(`Prime Gaming (v${siteVersion('prime-gaming')})`);
 
 const db = await jsonDb('prime-gaming.json', {});
@@ -70,7 +76,8 @@ try {
   // need to wait for some elements to exist before checking if signed in or accepting cookies:
   // One combined locator; if Luna got tarpitted after DOMContentLoaded and
   // renders neither, reload once instead of failing the run.
-  const signInOrUser = page.locator('button:has-text("Sign in")').or(page.locator('[data-a-target="user-dropdown-first-name-text"]')).first();
+  const signInBtn = page.locator('button').filter({ hasText: RX_SIGN_IN });
+  const signInOrUser = signInBtn.or(page.locator('[data-a-target="user-dropdown-first-name-text"]')).first();
   try {
     await signInOrUser.waitFor({ timeout: 30000 });
   } catch {
@@ -78,11 +85,11 @@ try {
     await gotoWithRetry(page, URL_CLAIM, PRIME_NAV);
     await signInOrUser.waitFor({ timeout: 30000 });
   }
-  page.click('[aria-label="Cookies usage disclaimer banner"] button:has-text("Accept Cookies")').catch(_ => { }); // to not waste screen space when non-headless, TODO does not work reliably, need to wait for something else first?
-  while (await page.locator('button:has-text("Sign in")').count() > 0) {
+  page.locator('[aria-label="Cookies usage disclaimer banner"] button').filter({ hasText: /Accept Cookies|Cookies akzeptieren|Akzeptieren/i }).first().click({ timeout: 10000 }).catch(_ => { }); // to not waste screen space when non-headless, TODO does not work reliably, need to wait for something else first?
+  while (await signInBtn.count() > 0) {
     log.warn('Not signed in');
     if (cfg.nowait) process.exit(1);
-    await page.click('button:has-text("Sign in")');
+    await signInBtn.first().click();
     if (!cfg.debug) context.setDefaultTimeout(cfg.login_timeout); // give user some extra time to log in
     log.status('Login timeout', `${cfg.login_timeout / 1000}s`);
     if (cfg.pg_email && cfg.pg_password) log.info('Using email and password from environment');
@@ -147,7 +154,7 @@ try {
   // console.log(`Twitch user name is ${twitch}`);
   db.data[user] ||= {};
 
-  if (await page.getByRole('button', { name: 'Try Prime' }).count()) {
+  if (await page.getByRole('button', { name: /^(Try Prime|Prime (gratis |kostenlos )?testen)$/i }).count()) {
     log.fail('Not an Amazon Prime member — no games to claim');
     await context.close();
     process.exit(1);
@@ -196,7 +203,7 @@ try {
       // parses as a well-formed key AND MS's cache doesn't know it as
       // already-used. If Next never enables, the code is either malformed
       // or (much more likely) already consumed / expired.
-      const nextBtn = iframe.locator('button:has-text("Next"):not([disabled])');
+      const nextBtn = iframe.locator('button:not([disabled])').filter({ hasText: /^(Next|Weiter)$/i }).first();
       try {
         await nextBtn.waitFor({ timeout: 10000 });
       } catch {
@@ -216,13 +223,13 @@ try {
         // true invalid-code case there deserves the extra caution.
         let bodyText = '';
         try { bodyText = (await iframe.locator('body').innerText({ timeout: 3000 })).toLowerCase(); } catch { /* best-effort */ }
-        if (/already\s*(own|redeem|used)|owned by|used by|is already/.test(bodyText)) {
+        if (/already\s*(own|redeem|used)|owned by|used by|is already|bereits (verwendet|eingelöst|genutzt)|schon (verwendet|eingelöst)/.test(bodyText)) {
           return { action: 'already redeemed', dbStatus: 'claimed and redeemed', logLevel: 'ok', message: `MS reports already redeemed (via validation error text)` };
         }
-        if (/expired|no longer valid/.test(bodyText)) {
+        if (/expired|no longer valid|abgelaufen|nicht mehr gültig/.test(bodyText)) {
           return { action: 'redeem (expired)', dbStatus: 'claimed:token-invalid', logLevel: 'warn', message: `MS reports code expired: ${bodyText.slice(0, 120)}` };
         }
-        if (/invalid|not recognized|not a valid|check.*code/.test(bodyText)) {
+        if (/invalid|not recognized|not a valid|check.*code|ungültig|nicht erkannt|kein gültiger/.test(bodyText)) {
           return { action: 'redeem (invalid)', dbStatus: 'claimed:token-invalid', logLevel: 'warn', message: `MS reports invalid: ${bodyText.slice(0, 120)}` };
         }
         if (isRetry) {
@@ -263,14 +270,14 @@ try {
         let errText = '';
         try { errText = (await iframe.locator('body').innerText({ timeout: 2000 })).slice(0, 120); } catch { /* best-effort */ }
         const lower = errText.toLowerCase();
-        if (lower.includes('already') || lower.includes('own')) {
+        if (lower.includes('already') || lower.includes('own') || lower.includes('bereits') || lower.includes('besitz')) {
           return { action: 'already redeemed', dbStatus: 'claimed and redeemed', logLevel: 'ok', message: `already owned (${phase.slug})` };
         }
         return { action: 'redeem (rejected)', dbStatus: 'claimed:token-invalid', logLevel: 'warn', message: `MS Store rejected the code at ${phase.slug}: ${errText || '(no error text)'}` };
       }
       if (phase.slug === 'redeem-confirm') {
         // Standard path — click Confirm to finalize.
-        const confirmBtn = iframe.locator('button:has-text("Confirm"):not([disabled])').first();
+        const confirmBtn = iframe.locator('button:not([disabled])').filter({ hasText: /^(Confirm|Bestätigen)$/i }).first();
         try {
           await confirmBtn.waitFor({ timeout: 8000 });
         } catch {
@@ -454,7 +461,7 @@ try {
   await games.waitFor();
   // await scrollUntilStable(() => games.locator('.item-card__action').count()); // number of games
   await scrollUntilStable(() => page.evaluate(() => document.querySelector('.tw-full-width').scrollHeight)); // height may change during loading while number of games is still the same?
-  const alreadyClaimed = await games.locator('p:has-text("Collected")').count();
+  const alreadyClaimed = await games.locator('p').filter({ hasText: RX_COLLECTED }).count();
   log.status('Already claimed', alreadyClaimed);
   // can't use .all() since the list of elements via locator will change after click while we iterate over it
   const internal = await games.locator('.item-card__action:has(button[data-a-target="FGWPOffer"])').all();
@@ -590,7 +597,7 @@ try {
         .or(page.locator('[data-a-target="LinkAccountButton"]'))
         .or(page.locator('.thank-you-title'))
         .or(page.locator('[data-a-target="ClaimStateClaimCodeContent"]'))
-        .or(page.getByText(/You collected this|Success|Erfolg/i))
+        .or(page.getByText(RX_CLAIM_SUCCESS))
         .first();
       await ctaBtn.or(settledState).first().waitFor({ state: 'visible', timeout: 30000 });
       if (!await settledState.isVisible().catch(() => false)) {
@@ -603,7 +610,7 @@ try {
       db.data[user][title] ||= { title, time: datetime(), url, store };
       const notify_game = { title, url };
       notify_games.push(notify_game); // status is updated below
-      const isSuccess = await page.locator('text=/You collected this|Success/').count() > 0;
+      const isSuccess = await page.getByText(RX_CLAIM_SUCCESS).count() > 0;
       if (!isSuccess && (await page.locator('[data-a-target="LinkAccountModal"]').count() > 0
          || await page.locator('[data-a-target="LinkAccountButton"]').count() > 0)) {
         log.warn(`${title} — account linking required for ${store}`);
@@ -728,7 +735,7 @@ try {
                 const r2t = await (await r2).text();
                 const r2j = JSON.parse(r2t);
                 if (r2j?.type == 'async_processing') {
-                  await page2.locator('h1:has-text("Code redeemed successfully!")').waitFor();
+                  await page2.locator('h1').filter({ hasText: /Code redeemed successfully|erfolgreich eingelöst/i }).first().waitFor();
                   redeem_action = 'redeemed';
                   db.data[user][title].status = 'claimed and redeemed';
                   log.ok(`${title} — claimed and redeemed on ${store}`);
@@ -891,7 +898,7 @@ try {
     log.status('DLC', 'loading all on page...');
     await scrollUntilStable(() => loot.locator('[data-a-target="item-card"]').count());
 
-    log.status('DLC already claimed', await loot.locator('p:has-text("Collected")').count());
+    log.status('DLC already claimed', await loot.locator('p').filter({ hasText: RX_COLLECTED }).count());
 
     const cards = await loot.locator('[data-a-target="item-card"]:has(p:text-is("Claim"))').all();
     log.status('DLC unclaimed', cards.length);
@@ -924,7 +931,7 @@ try {
           .or(page.locator('.tw-button:has-text("Claim")'))
           .first();
         await dlcBtn.click({ timeout: 30000 });
-        await page.locator('button:has-text("Continue")').first().click({ timeout: 5000 }).catch(() => { });
+        await page.locator('button').filter({ hasText: /^(Continue|Weiter)$/i }).first().click({ timeout: 5000 }).catch(() => { });
         const linkAccountButton = page.locator('[data-a-target="LinkAccountButton"]');
         let unlinked_store;
         if (await linkAccountButton.count()) {

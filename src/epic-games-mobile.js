@@ -1,5 +1,7 @@
 // following https://github.com/vogler/free-games-claimer/issues/474
 
+import { cfg } from './config.js';
+
 const get = async (page, platform = 'android') => { // or ios
   await page.goto(`https://egs-platform-service.store.epicgames.com/api/v2/public/discover/home?count=10&country=DE&locale=en&platform=${platform}&start=0&store=EGS`);
   const response = await page.innerText('body');
@@ -34,7 +36,7 @@ const get = async (page, platform = 'android') => { // or ios
 //   }
 // }
 
-const url = s => `https://store.epicgames.com/en-US/p/${s}`;
+const url = s => `https://store.epicgames.com/${cfg.eg_locale || 'en-US'}/p/${s}`;
 
 export const getPlatformGames = async (page, platform) => {
   const json = await get(page, platform);

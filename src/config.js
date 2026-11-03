@@ -31,8 +31,17 @@ const localeFromLang = lang => {
   return /^[a-z]{2,3}(-[A-Za-z0-9]+)?$/i.test(tag) ? tag : '';
 };
 
+// FGC_REGION=de (opt-in, fork addition): Prime Gaming + Epic Games use the
+// German sites (luna.amazon.de, store.epicgames.com/de) with a German
+// browser locale. Unset = previous behaviour (US/English sites).
+const REGION = String(process.env.FGC_REGION || '').trim().toLowerCase();
+const REGION_DE = REGION === 'de';
+const PG_DEFAULT_BASE = 'https://luna.amazon.com';
+
 // Options - also see table in README.md
 export const cfg = {
+  region: REGION || undefined,
+  region_de: REGION_DE,
   debug: process.env.DEBUG == '1' || process.env.PWDEBUG == '1', // runs non-headless and opens https://playwright.dev/docs/inspector
   debug_network: process.env.DEBUG_NETWORK == '1', // log network requests and responses
   record: adv.record ?? false, // `recordHar` (network) + `recordVideo`
@@ -115,7 +124,11 @@ export const cfg = {
   // CONFIG_SCHEMA path (Settings → Services → Prime Gaming → Luna base
   // URL, falling back to PG_BASE_URL env, then default). Trim trailing
   // slash to keep concatenation clean. See #52.
-  pg_base_url: String(pg.baseUrl || 'https://luna.amazon.com').replace(/\/+$/, ''),
+  // An explicit non-default PG_BASE_URL / Settings value always wins;
+  // FGC_REGION=de only replaces the US default.
+  pg_base_url: String(pg.baseUrl && pg.baseUrl.replace(/\/+$/, '') !== PG_DEFAULT_BASE ? pg.baseUrl : (REGION_DE ? 'https://luna.amazon.de' : PG_DEFAULT_BASE)).replace(/\/+$/, ''),
+  // Epic store path segment and login ?lang= (FGC_REGION=de → German store).
+  eg_locale: REGION_DE ? 'de' : 'en-US',
   // auth gog
   gog_email: process.env.GOG_EMAIL || process.env.EMAIL,
   gog_password: process.env.GOG_PASSWORD || process.env.PASSWORD,

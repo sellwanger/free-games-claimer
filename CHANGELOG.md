@@ -4,6 +4,18 @@ Release notes for [Feldorn's Free Games Claimer](README.md). Most recent at the 
 
 ---
 
+## Fork changes (sellwanger) — unreleased
+
+**New: `FGC_REGION=de` runs Prime Gaming and Epic Games on the German sites.**
+
+Without it nothing changes. With it, Prime uses `luna.amazon.de` (an explicit `PG_BASE_URL` still wins), Epic uses `store.epicgames.com/de` and the German login, and both open the browser in German, so the pages match a German IP and account. The button and label checks for both services now accept the German texts next to the English ones (sign-in, "Collected", success screens, "Free Now" tiles, base-game and region notices, loading placeholder, Microsoft Store and GOG redeem steps).
+
+**Fix: Prime and Epic runs no longer die on a single 60-second timeout.**
+
+Prime's external claims waited on six things at once for 60 seconds each and ended the whole run when none matched; one stuck game now gets skipped after 30 seconds and the rest continue. Legacy Games codes are saved before anything else can fail, and the redeem link is found on German pages too. Epic's background watchers are capped at 30 seconds so they can't act on the next game, a product page that doesn't load gets one reload, and the captcha retry works on German pages.
+
+---
+
 ## What's new in 2.12.30
 
 **AliExpress: optional missions on top of the daily check-in.**

@@ -14,9 +14,12 @@ import { fetchFGFPosts, filterFor as filterFgfFor, unhandledPlatforms as fgfUnha
 
 const screenshot = (...a) => resolve(cfg.dir.screenshots, 'epic-games', ...a);
 
-const URL_CLAIM = cfg.eg_page_url || 'https://store.epicgames.com/en-US/free-games'; // EG_PAGE_URL override
-const URL_LOGIN = 'https://www.epicgames.com/id/login?lang=en-US&noHostRedirect=true&redirectUrl=' + URL_CLAIM;
-const URL_PROMOTIONS = 'https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=en-US';
+// FGC_REGION=de → cfg.eg_locale 'de' (German store + login), else 'en-US'.
+const EG_LOCALE = cfg.eg_locale || 'en-US';
+const EG_STORE = `https://store.epicgames.com/${EG_LOCALE}`;
+const URL_CLAIM = cfg.eg_page_url || `${EG_STORE}/free-games`; // EG_PAGE_URL override
+const URL_LOGIN = `https://www.epicgames.com/id/login?lang=${EG_LOCALE}&noHostRedirect=true&redirectUrl=` + URL_CLAIM;
+const URL_PROMOTIONS = `https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=${EG_LOCALE}${cfg.region_de ? '&country=DE&allowCountries=DE' : ''}`;
 
 // Locale-portable text matchers for Epic's checkout flow. English is
 // the baseline; other locales added as they surface in user reports.
@@ -45,7 +48,16 @@ const OWNED_TEXTS_GLOBAL = [
 // the success race, and the recovery probe all agree on what "owned" is.
 // The `loading` filter was previously present in the recovery-probe copy
 // only — code-review flagged the drift. Now all callers get it uniformly.
-const isOwnedText = (t) => t && t !== 'loading' && OWNED_TEXTS_GLOBAL.some(w => t === w || t.startsWith(w));
+// CTA placeholder while Epic resolves ownership/price ("Wird geladen" on /de).
+const LOADING_TEXTS = ['loading', 'wird geladen', 'lädt', 'laden …', 'laden...'];
+const isLoadingText = (t) => LOADING_TEXTS.includes(String(t || '').trim().toLowerCase());
+const isOwnedText = (t) => t && !isLoadingText(t) && OWNED_TEXTS_GLOBAL.some(w => t === w || t.startsWith(w));
+// Remaining product-page labels (German added for FGC_REGION=de).
+const RX_FREE_NOW = '^(Free Now|Jetzt gratis|Jetzt kostenlos|Gratis erhalten)$';
+const RX_REQUIRES_BASE = /requires base game|basisspiel/i;
+const RX_ABOUT_BUNDLE = /^(About Bundle|Über (das )?Bundle|Über das Paket)$/i;
+const RX_OVERVIEW = /^(Overview|Übersicht)$/i;
+const RX_UNAVAILABLE_REGION = /unavailable in your region|in (deiner|Ihrer) Region nicht verfügbar/i;
 
 // 2026-10-15: Epic's eds_370 store redesign dropped
 // data-testid="purchase-cta-button". The CTA is now the first un-labelled
@@ -83,7 +95,7 @@ const CHECKOUT_IFRAME = '#webPurchaseContainer iframe, iframe[src*="/checkout?pu
 // instead: a visible, on-screen hCaptcha challenge frame or the wrapper's
 // "One more step" heading counts. Invisible pre-loaded hCaptcha frames are
 // parked off-screen/hidden, so the bounding-box check filters them out.
-const RX_CAPTCHA_WALL = /One more step|complete a security check/i;
+const RX_CAPTCHA_WALL = /One more step|complete a security check|Noch ein Schritt|Sicherheitsüberprüfung/i;
 async function isCaptchaShowing(page, iframe) {
   if (page.isClosed()) return false;
   try {
@@ -256,7 +268,7 @@ try {
   if (cfg.time) console.time('login');
 
   // page.click('button:has-text("Accept All Cookies")').catch(_ => { }); // Not needed anymore since we set the cookie above. Clicking this did not always work since the message was animated in too slowly.
-  page.locator('button:has-text("Continue")').click().catch(_ => { }); // already logged in, but need to accept updated "Epic Games Privacy Policy"
+  page.locator('button').filter({ hasText: RX_CONTINUE }).first().click({ timeout: 15000 }).catch(_ => { }); // already logged in, but need to accept updated "Epic Games Privacy Policy"
 
   // The store header alone isn't proof: its refresh token outlives the
   // account session that Get/checkout needs, so a profile can look signed
@@ -362,7 +374,7 @@ try {
   if (cfg.time) console.time('claim all games');
 
   // Detect free games
-  const game_loc = page.locator('a:has(span:text-is("Free Now"))');
+  const game_loc = page.locator(`a:has(span:text-matches("${RX_FREE_NOW}", "i"))`);
   // v2.12.26: the "Free Now" tiles normally render within a few seconds.
   // When the promotions API answered we already know this week's free
   // games, so cap the wait at 15s instead of the full cfg.timeout (60s) —
@@ -387,7 +399,7 @@ try {
   // Compare on the last path segment, the same id the claim DB uses.
   const pageSlugs = new Set(urls.map(u => u.split('/').pop().split('?')[0].toLowerCase()));
   const apiOnly = (apiFreeSlugs || []).filter(sl => !pageSlugs.has(sl.split('/').pop()));
-  for (const sl of apiOnly) urls.push(`https://store.epicgames.com/en-US/p/${sl}`);
+  for (const sl of apiOnly) urls.push(`${EG_STORE}/p/${sl}`);
   // Message from what was actually collected, not from whether the wait
   // timed out (a timed-out wait doesn't mean the tiles are absent).
   if (!urlSlugs.length) {
@@ -619,7 +631,8 @@ try {
     const ctaReady = () => page.waitForFunction(
       (sel) => {
         const btn = document.querySelector(sel);
-        return btn && /[ei]/i.test(btn.textContent) && btn.textContent != 'Loading';
+        const t = (btn?.textContent || '').trim().toLowerCase();
+        return btn && /[ei]/i.test(t) && !['loading', 'wird geladen', 'lädt'].includes(t);
       },
       CTA_SELECTOR,
       { timeout: 30000 },
@@ -669,7 +682,9 @@ try {
     const isOwnedByButton = btnTextIndicatesOwned || btnDisabled;
 
     // click Continue if 'This game contains mature content recommended only for ages 18+'
-    if (await page.locator('button:has-text("Continue")').count() > 0) {
+    // :visible — a German page can carry other hidden "Weiter" buttons.
+    const matureContinue = page.locator('button:visible').filter({ hasText: RX_CONTINUE });
+    if (await matureContinue.count() > 0) {
       if (cfg.debug) console.log('  This game contains mature content recommended only for ages 18+');
       if (await page.locator('[data-testid="AgeSelect"]').count()) {
         log.warn('Got unexpected age gate — please report to https://github.com/vogler/free-games-claimer/issues/275');
@@ -680,14 +695,14 @@ try {
         await page.locator('#year_toggle').click();
         await page.locator('#year_menu li:has-text("1987")').click();
       }
-      await page.click('button:has-text("Continue")', { delay: 111 });
+      await matureContinue.first().click({ delay: 111, timeout: 15000 }).catch(() => { });
       await page.waitForTimeout(2000);
     }
 
     let title;
     let bundle_includes;
-    if (await page.locator('span:text-is("About Bundle")').count()) {
-      title = (await page.locator(`span:has-text("Buy"):left-of(${CTA_SELECTOR})`).first().innerText()).replace('Buy ', '');
+    if (await page.locator('span').filter({ hasText: RX_ABOUT_BUNDLE }).count()) {
+      title = (await page.locator(`span:text-matches("^(Buy|Kaufen) ", "i"):left-of(${CTA_SELECTOR})`).first().innerText({ timeout: 10000 }).catch(() => page.locator('h1').first().innerText())).replace(/^(Buy|Kaufen) /i, '');
       // h1 first didn't exist for bundles but now it does... However h1 would e.g. be 'Fallout® Classic Collection' instead of 'Fallout Classic Collection'
       try {
         bundle_includes = await Promise.all((await page.locator('.product-card-top-row h5').all()).map(b => b.innerText()));
@@ -720,13 +735,13 @@ try {
       notify_game.status = 'existed';
       db.data[user][game_id].status ||= 'existed'; // does not overwrite claimed or failed
       if (db.data[user][game_id].status.startsWith('failed')) db.data[user][game_id].status = 'manual'; // was failed but now it's claimed
-    } else if (btnText == 'requires base game') {
+    } else if (RX_REQUIRES_BASE.test(btnText)) {
       log.skip(title, 'requires base game');
       notify_game.status = 'requires base game';
       notify_game.details = `<a href="${url}">View game</a>`;
       db.data[user][game_id].status ||= 'failed:requires-base-game';
       // TODO claim base game if it is free
-      const baseUrl = 'https://store.epicgames.com' + await page.locator('a:has-text("Overview")').getAttribute('href');
+      const baseUrl = 'https://store.epicgames.com' + await page.locator('a').filter({ hasText: RX_OVERVIEW }).first().getAttribute('href', { timeout: 10000 });
       log.info(`Base game — ${baseUrl}`);
       // await page.click('a:has-text("Overview")');
       // TODO handle this via function call for base game above since this will never terminate if DRYRUN=1
@@ -828,7 +843,7 @@ try {
         await page.waitForSelector(CHECKOUT_IFRAME); // TODO needed?
         iframe = page.frameLocator(CHECKOUT_IFRAME).first();
         // skip game if unavailable in region, https://github.com/vogler/free-games-claimer/issues/46 TODO check games for account's region
-        if (await iframe.locator(':has-text("unavailable in your region")').count() > 0) {
+        if (await iframe.getByText(RX_UNAVAILABLE_REGION).count() > 0) {
           log.skip(title, 'unavailable in your region');
           db.data[user][game_id].status = notify_game.status = 'unavailable-in-region';
           notify_game.details = `<a href="${url}">View game</a>`;
@@ -913,7 +928,7 @@ try {
             const btn = document.querySelector(sel);
             if (!btn) return false;
             const txt = (btn.innerText || '').trim().toLowerCase();
-            if (!txt || txt === 'loading') return false;
+            if (!txt || txt === 'loading' || txt === 'wird geladen' || txt === 'lädt') return false;
             return ownedList.some(t => txt === t || txt.startsWith(t));
           }, { sel: CTA_SELECTOR, ownedList: OWNED_TEXTS_GLOBAL }, { timeout: cfg.timeout }),
         ]);
@@ -1037,7 +1052,8 @@ try {
         await page.waitForFunction(
           (sel) => {
             const btn = document.querySelector(sel);
-            return btn && /[ei]/i.test(btn.textContent) && btn.textContent != 'Loading';
+            const t = (btn?.textContent || '').trim().toLowerCase();
+        return btn && /[ei]/i.test(t) && !['loading', 'wird geladen', 'lädt'].includes(t);
           },
           CTA_SELECTOR,
           { timeout: 30000 },
@@ -1058,7 +1074,7 @@ try {
           db.data[user][game_id].status = 'claimed';
           continue;
         }
-        if (btnText === 'requires base game') {
+        if (RX_REQUIRES_BASE.test(btnText)) {
           log.fail(`${retry.title} — requires base game — not retried`);
           retry.status = 'failed';
           retry.details = `Retry also failed. Game: ${retry.url}`;
@@ -1121,7 +1137,7 @@ try {
             const btn = document.querySelector(sel);
             if (!btn) return false;
             const txt = (btn.innerText || '').trim().toLowerCase();
-            if (!txt || txt === 'loading') return false;
+            if (!txt || txt === 'loading' || txt === 'wird geladen' || txt === 'lädt') return false;
             return ownedList.some(t => txt === t || txt.startsWith(t));
           }, { sel: CTA_SELECTOR, ownedList: OWNED_TEXTS_GLOBAL }, { timeout: cfg.timeout }),
         ]);
@@ -1159,12 +1175,12 @@ try {
     }
     if (failedOfferIds.length) {
       log.info(`Cart fallback — ${failedOfferIds.length}/${failedGames.length} failed game(s) matched to offer IDs`);
-      const cartUrl = `https://store.epicgames.com/en-US/cart?${failedOfferIds.map(id => `offerId=${id}`).join('&')}`;
+      const cartUrl = `${EG_STORE}/cart?${failedOfferIds.map(id => `offerId=${id}`).join('&')}`;
       log.info(`Cart link — ${cartUrl}`);
       for (const g of failedGames) {
         const offerId = offerIdMap[slugFromUrl(g.url)];
         if (offerId) {
-          const singleCartUrl = `https://store.epicgames.com/en-US/cart?offerId=${offerId}`;
+          const singleCartUrl = `${EG_STORE}/cart?offerId=${offerId}`;
           g.details = (g.details ? g.details + ' · ' : '') + `<a href="${singleCartUrl}">Claim in cart</a>`;
         }
       }
